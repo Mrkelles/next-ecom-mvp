@@ -4,6 +4,7 @@ import db from "@/db/db";
 import {z} from "zod"
 import fs from "fs/promises"
 import { notFound, redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 
 const fileSchema = z.instanceof(File, { message:"Required" })
 const imageSchema = fileSchema.refine(
@@ -47,15 +48,75 @@ export async function addProduct(prevState: unknown, formData: FormData) {
             filePath,
             imagePath
     }})
-
+    revalidatePath("/")
+    revalidatePath("/products")
     redirect("/admin/products")
 }
+
+
+const editSchema = addSchema.extend({
+    file: fileSchema.optional(),
+    image: fileSchema.optional()
+})
+
+export async function updateProduct(id:string, prevState: unknown, formData: FormData) {
+    const result = editSchema.safeParse(Object.fromEntries(formData.entries()))
+    if (result.success === false) {
+        return result.error.formErrors.fieldErrors
+    }
+
+    const data = result.data
+    const product = db.product.findUnique({where: {id}})
+
+    if (product == null) return notFound()
+    
+    let filePath = product.filePath
+    if(data.file != null && data.file.size > 0) {
+        if (product.filePath) {  // Check if filePath exists before deleting
+            await fs.unlink(product.filePath).catch(() => null);  // Handle potential errors
+        }
+        filePath = `products/${crypto.randomUUID()}-${data.file.name}`
+        await fs.writeFile(filePath, Buffer.from(await data.file.arrayBuffer()))
+    }
+
+    
+    let imagePath = product.imagePath
+    if(data.file != null && data.image.size > 0) {
+        if (product.imagePath) {  // Check if imagePath exists before deleting
+            await fs.unlink(`public${product.imagePath}`).catch(() => null);  // Handle potential errors
+        }
+        imagePath = `/products/${crypto.randomUUID()}-${data.image?.name}`
+        await fs.writeFile(
+            `public${imagePath}`,
+            Buffer.from(await data.image.arrayBuffer())
+        )
+    }
+
+
+
+    await db.product.update({
+        where:{id}, 
+        data: {
+            name: data.name,
+            description: data.description,
+            priceInCents: data.priceInCents,
+            filePath,
+            imagePath
+    }})
+    revalidatePath("/")
+    revalidatePath("/products")
+    redirect("/admin/products")
+}
+
 
 export async function toggleProductAvailability(id:string,
     isAvailableForPurchase:boolean) {
         await db.product.update({ where: {id}, data: {
             isAvailableForPurchase
         } })
+
+        revalidatePath("/")
+        revalidatePath("/products")
     }
 
 export async function deleteProduct(id:string) {
@@ -64,5 +125,8 @@ export async function deleteProduct(id:string) {
 
     await fs.unlink(product.filePath)
     await fs.unlink(`public${product.imagePath}`)
+
+    revalidatePath("/")
+    revalidatePath("/products")
 }
 
